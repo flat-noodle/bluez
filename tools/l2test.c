@@ -83,6 +83,7 @@ static int max_transmit = 3;
 /* Default data size */
 static long data_size = -1;
 static long buffer_size = 2048;
+static  int update_mtus = 0;
 
 /* Default addr and psm and cid */
 static bdaddr_t bdaddr;
@@ -123,6 +124,11 @@ static int priority = -1;
 static int rcvbuf = 0;
 static int chan_policy = -1;
 static int bdaddr_type = 0;
+
+const static option longopts[2] = {
+	{ "update_mtus", 0, &update_mtus, 1 },
+	{ 0, 0, 0, 0 }
+};
 
 struct lookup_table {
 	const char *name;
@@ -280,6 +286,14 @@ static void hexdump(unsigned char *s, unsigned long l)
 		s += 16;
 		puts(bfr);
 	}
+}
+
+static void print_l2cap_options(struct l2cap_options *opts)
+{
+	syslog(LOG_INFO, "L2CAP Options [imtu %d, omtu %d, flush_to %d, "
+			"mode %d, fcs %d, txwin_size %d, max_tx %d]",
+			opts->imtu, opts->omtu, opts->flush_to,
+			opts->mode, opts->fcs, opts->txwin_size, opts->max_tx);
 }
 
 static int getopts(int sk, struct l2cap_options *opts, bool connected)
@@ -633,6 +647,7 @@ static void do_listen(void (*handler)(int sk))
 							strerror(errno), errno);
 		goto error;
 	}
+	print_l2cap_options(&opts);
 
 	/* Set new options */
 	opts.omtu = omtu;
@@ -737,6 +752,11 @@ static void do_listen(void (*handler)(int sk))
 			goto error;
 		}
 
+		if (opts.omtu != omtu || opts.imtu != imtu) {
+			syslog(LOG_INFO, "MTU changed during connection setup: "
+					"omtu %d -> %d, imtu %d -> %d",
+					omtu, opts.omtu, imtu, opts.imtu);
+		}
 		omtu = (opts.omtu > buffer_size) ? buffer_size : opts.omtu;
 		imtu = (opts.imtu > buffer_size) ? buffer_size : opts.imtu;
 
@@ -777,6 +797,7 @@ static void do_listen(void (*handler)(int sk))
 			}
 		}
 
+		/* TODO: send_mode/do_send should run in same thread - safe to set MTU variables directly */
 		handler(nsk);
 		close(sk);
 
@@ -794,7 +815,7 @@ static void dump_mode(int sk)
 	socklen_t optlen;
 	int opt, len;
 
-	if (data_size < 0)
+	if (data_size < 0 || update_mtus)
 		data_size = imtu;
 
 	if (defer_setup) {
@@ -854,7 +875,7 @@ static void recv_mode(int sk)
 	socklen_t optlen;
 	int opt, len;
 
-	if (data_size < 0)
+	if (data_size < 0 || update_mtus)
 		data_size = imtu;
 
 	if (defer_setup) {
@@ -964,10 +985,14 @@ static void do_send(int sk)
 
 	syslog(LOG_INFO, "Sending ...");
 
-	if (data_size < 0)
+	if (data_size < 0 || update_mtus)
 		data_size = omtu;
 
 	if (filename) {
+		if (update_mtus) {
+			syslog(LOG_ERR, "Invalid to update MTUs in file mode");
+			exit(1);
+		}
 		fd = open(filename, O_RDONLY);
 		if (fd < 0) {
 			syslog(LOG_ERR, "Open failed: %s (%d)",
@@ -1368,8 +1393,8 @@ int main(int argc, char *argv[])
 
 	bacpy(&bdaddr, BDADDR_ANY);
 
-	while ((opt = getopt(argc, argv, "a:b:cde:g:i:mnpqrstuwxyz"
-		"AB:C:D:EF:GH:I:J:K:L:MN:O:P:Q:RSTUV:W:X:Y:Z:")) != EOF) {
+	while ((opt = getopt_long(argc, argv, "a:b:cde:g:i:mnpqrstuwxyz"
+		"AB:C:D:EF:GH:I:J:K:L:MN:O:P:Q:RSTUV:W:X:Y:Z:", longopts, NULL)) != EOF) {
 		switch (opt) {
 		case 'r':
 			mode = RECV;
@@ -1601,10 +1626,15 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	if (data_size < 0)
-		buffer_size = (omtu > imtu) ? omtu : imtu;
-	else
-		buffer_size = data_size;
+	if (update_mtus) {
+		/* Leave buffer_size maximum to allow MTU to grow */
+		data_size = (omtu > imtu) ? omtu : imtu;
+	} else {
+		if (data_size < 0)
+			buffer_size = (omtu > imtu) ? omtu : imtu;
+		else
+			buffer_size = data_size;
+	}
 
 	if (!(buf = malloc(buffer_size))) {
 		perror("Can't allocate data buffer");
