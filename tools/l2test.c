@@ -83,7 +83,8 @@ static int max_transmit = 3;
 /* Default data size */
 static long data_size = -1;
 static long buffer_size = 2048;
-static  int update_mtus = 0;
+/* TODO: Temporarily enabled to avoid dealing with longopts */
+static  int update_mtus = 1
 
 /* Default addr and psm and cid */
 static bdaddr_t bdaddr;
@@ -124,11 +125,6 @@ static int priority = -1;
 static int rcvbuf = 0;
 static int chan_policy = -1;
 static int bdaddr_type = 0;
-
-const static option longopts[2] = {
-	{ "update_mtus", 0, &update_mtus, 1 },
-	{ 0, 0, 0, 0 }
-};
 
 struct lookup_table {
 	const char *name;
@@ -1393,8 +1389,8 @@ int main(int argc, char *argv[])
 
 	bacpy(&bdaddr, BDADDR_ANY);
 
-	while ((opt = getopt_long(argc, argv, "a:b:cde:g:i:mnpqrstuwxyz"
-		"AB:C:D:EF:GH:I:J:K:L:MN:O:P:Q:RSTUV:W:X:Y:Z:", longopts, NULL)) != EOF) {
+	while ((opt = getopt(argc, argv, "a:b:cde:g:i:mnpqrstuwxyz"
+		"AB:C:D:EF:GH:I:J:K:L:MN:O:P:Q:RSTUV:W:X:Y:Z:")) != EOF) {
 		switch (opt) {
 		case 'r':
 			mode = RECV;
