@@ -83,6 +83,7 @@ static int max_transmit = 3;
 /* Default data size */
 static long data_size = -1;
 static long buffer_size = 2048;
+static  int update_mtus = 0;
 
 /* Default addr and psm and cid */
 static bdaddr_t bdaddr;
@@ -413,6 +414,33 @@ static int print_info(int sk, struct l2cap_options *opts)
 	}
 
 	return 0;
+}
+
+static int refresh_mtus(int sk)
+{
+	int new_omtu, new_imtu;
+	int changed = 0;
+	struct l2cap_options opts;
+
+	/* Get current options */
+	if (getopts(sk, &opts, true) < 0) {
+		syslog(LOG_ERR, "Can't get L2CAP options: %s (%d)",
+							strerror(errno), errno);
+		return 0;
+	}
+
+	new_omtu = (opts.omtu > buffer_size) ? buffer_size : opts.omtu;
+	new_imtu = (opts.imtu > buffer_size) ? buffer_size : opts.imtu;
+
+	if (new_omtu != omtu || new_imtu != imtu) {
+		syslog(LOG_INFO, "MTU reconfigured: omtu %d -> %d, imtu %d -> %d",
+			omtu, new_omtu, imtu, new_imtu);
+		omtu = new_omtu;
+		imtu = new_imtu;
+		changed = 1;
+	}
+
+	return changed;
 }
 
 static int do_connect(char *svr)
@@ -872,6 +900,9 @@ static void recv_mode(int sk)
 
 	seq = 0;
 	while (1) {
+		if (update_mtus && refresh_mtus(sk)) {
+			data_size = imtu;
+		}
 		gettimeofday(&tv_beg, NULL);
 		total = 0;
 		while (total < data_size) {
@@ -997,6 +1028,9 @@ static void do_send(int sk)
 
 	seq = seq_start;
 	while ((num_frames == -1) || (num_frames-- > 0)) {
+		if (update_mtus && refresh_mtus(sk)) {
+			data_size = omtu;
+		}
 		put_le32(seq, buf);
 		put_le16(data_size, buf + 4);
 
@@ -1352,7 +1386,8 @@ static void usage(void)
 		"\t[-M] become central\n"
 		"\t[-T] enable timestamps\n"
 		"\t[-V type] address type (help for list, default = bredr)\n"
-		"\t[-e seq] initial sequence value (default = 0)\n");
+		"\t[-e seq] initial sequence value (default = 0)\n"
+		"\t[-f] Allows MTU to be updated during connection if true (default = 0)\n");
 }
 
 int main(int argc, char *argv[])
@@ -1362,7 +1397,7 @@ int main(int argc, char *argv[])
 
 	bacpy(&bdaddr, BDADDR_ANY);
 
-	while ((opt = getopt(argc, argv, "a:b:cde:g:i:mnpqrstuwxyz"
+	while ((opt = getopt(argc, argv, "a:b:cde:fg:i:mnpqrstuwxyz"
 		"AB:C:D:EF:GH:I:J:K:L:MN:O:P:Q:RSTUV:W:X:Y:Z:")) != EOF) {
 		switch (opt) {
 		case 'r':
@@ -1577,6 +1612,10 @@ int main(int argc, char *argv[])
 			disc_delay = atoi(optarg) * 1000;
 			break;
 
+		case 'f':
+			update_mtus = 1;
+			break;
+
 		default:
 			usage();
 			exit(1);
@@ -1594,11 +1633,6 @@ int main(int argc, char *argv[])
 		usage();
 		exit(1);
 	}
-
-	if (data_size < 0)
-		buffer_size = (omtu > imtu) ? omtu : imtu;
-	else
-		buffer_size = data_size;
 
 	if (!(buf = malloc(buffer_size))) {
 		perror("Can't allocate data buffer");
